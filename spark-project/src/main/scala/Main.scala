@@ -5,6 +5,7 @@ import org.apache.spark.rdd.RDD
 import java.io.File
 import javax.imageio.ImageIO
 import scala.math.BigDecimal.double2bigDecimal
+import scala.util.control.Breaks.{break, breakable}
 
 
 object Main {
@@ -177,9 +178,13 @@ object Main {
       val xx = 0 to w by w / SQRT_SUBDIV
       val yy = 0 to h by h / SQRT_SUBDIV
 
-      for (n <- 1 until SQRT_SUBDIV; m <- 1 until SQRT_SUBDIV) {
+      for (n <- 1 until SQRT_SUBDIV; m <- 1 until SQRT_SUBDIV) breakable {
         val (i, j) = (SQRT_SUBDIV * xx(n - 1) / w, SQRT_SUBDIV * yy(m - 1) / h)
-        val alpha = alpha_range((NB_ALPHA - 1) * zones(i)(j) / max_kill)
+        val danger_level = (NB_ALPHA - 1) * zones(i)(j) / max_kill
+
+        if (danger_level == 0) break
+
+        val alpha = alpha_range(danger_level)
 
         val xStart = xx(n - 1)
         val yStart = yy(m - 1)
