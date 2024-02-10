@@ -1,26 +1,18 @@
 case class Station(
-  val id: String,
-  val name: String,
-  val latitude: Double,
-  val longitude: Double) {
-
-}
-
+  id: String,
+  name: String,
+  latitude: Double,
+  longitude: Double)
 case class StationWithDist(
-  val id: String,
-  val name: String,
-  val latitude: Double,
-  val longitude: Double,
-  val dist: Double) {
-
-}
-
+  id: String,
+  name: String,
+  latitude: Double,
+  longitude: Double,
+  dist: Double)
 case class StationWithPath(
-  val id: String,
-  val name: String,
-  val latitude: Double,
-  val longitude: Double,
-  val dist: Double,
-  val path: List[String]) {
-
-}
+  id: String,
+  name: String,
+  latitude: Double,
+  longitude: Double,
+  dist: Double,
+  path: List[String])

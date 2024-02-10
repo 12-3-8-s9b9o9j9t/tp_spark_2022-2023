@@ -1,10 +1,8 @@
 case class Trip (
-  val id: String,
-  val start_station: String,
-  val end_station: String,
-  val start_time: Long,
-  val end_time: Long,
-  val bike_type: String,
-  val rider_type: String) {
-
-}
+  id: String,
+  start_station: String,
+  end_station: String,
+  start_time: Long,
+  end_time: Long,
+  bike_type: String,
+  rider_type: String)
