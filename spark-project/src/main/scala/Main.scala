@@ -39,7 +39,7 @@ object Main {
   private val ERANGEL_SCALE = MAP_SIZE / 812500.0
   private val MIRAMAR_SCALE = MAP_SIZE / 819200.0
 
-  private val NaW = Set("Bluezone", "RedZone", "Down and Out", "Drown", "Falling")
+  private val NOT_A_WEAPON = Set("Bluezone", "RedZone", "Down and Out", "Drown", "Falling")
 
   def main(args: Array[String]): Unit = {
     val sparkConf = new SparkConf().setAppName("project").setMaster("local[1]")
@@ -49,48 +49,44 @@ object Main {
 
     val data = sc.textFile(path)
     val header = data.first()
-    val rdd = data.filter(row => row != header)
+    val rdd = data.filter(row => row != header) // Get data without csv header
       .map(row => row.split(','))
 
-    val killers = rdd.filter(row => !row(1).isBlank)
-      .map(row => Player(row(1)))
+    val killers = rdd.filter(row => !row(1).isBlank) // Remove unspecified killers
+      .map(row => Player(row(1))) // -> RDD(Player)
       .distinct()
-    val victims = rdd.map(row => Player(row(8)))
+    val victims = rdd.map(row => Player(row(8))) // -> RDD(Player)
       .distinct()
 
     val players: RDD[(VertexId, VertexType)] = killers.union(victims)
       .distinct()
-      .map(
-        p => (p.name.hashCode.toLong, p)
-      )
+      .map(p => (p.name.hashCode.toLong, p)) // -> RDD((VertexId, Player))
 
-    val games: RDD[(VertexId, VertexType)] = rdd.map(row => Game(row(6), row(5)))
+    val games: RDD[(VertexId, VertexType)] = rdd.map(row => Game(row(6), row(5))) // -> RDD(Game)
       .distinct()
-      .map(
-        g => (g.id.hashCode.toLong, g)
-      )
+      .map(g => (g.id.hashCode.toLong, g)) // -> RDD((VertexId, Game))
 
-    val killers_ranked = rdd.filter(row => !(row(1).isBlank || row(1) == "#unknown"))
-      .map(row => ((row(1), row(6)), row(2)))
+    val killers_ranked = rdd.filter(row => !(row(1).isBlank || row(1) == "#unknown")) // Remove unspecified or unknown killers
+      .map(row => ((row(1), row(6)), row(2))) // -> RDD(((name, game), rank))
       .distinct()
-    val victims_ranked = rdd.filter(row => row(8) != "#unknown")
-      .map(row => ((row(8), row(6)), row(9)))
+    val victims_ranked = rdd.filter(row => row(8) != "#unknown") // Remove unknown victims
+      .map(row => ((row(8), row(6)), row(9))) // -> RDD(((name, game), rank))
       .distinct()
 
     val ranked: RDD[Edge[EdgeType]] = killers_ranked.union(victims_ranked)
       .distinct()
-      .reduceByKey((x, y) => if (x.isBlank) y else x)
+      .reduceByKey((x, y) => if (x.isBlank) y else x) // Keep the first non-blank rank
       .filter {
-        case ((_, _), rank) => !rank.isBlank
+        case ((_, _), rank) => !rank.isBlank // Remove players with still no rank
       }.map {
         case ((player, game), rank) => Edge(
           player.hashCode.toLong,
           game.hashCode.toLong,
           Ranked(rank.toDouble.toInt)
         )
-      }
+      } // -> RDD(player vertex id, game vertex id, Ranked)
 
-    val killed: RDD[Edge[EdgeType]] = rdd.filter(row => !(row(1).isBlank || NaW.contains(row(0))))
+    val killed: RDD[Edge[EdgeType]] = rdd.filter(row => !(row(1).isBlank || NOT_A_WEAPON.contains(row(0)))) // Remove unspecified killers and non-weapons
       .map(row => {
         val scale = row(5) match {
           case "ERANGEL" => ERANGEL_SCALE
@@ -102,9 +98,9 @@ object Main {
           Killed(row(0), row(7).toInt,
             (scale * row(3).toDouble, scale * row(4).toDouble),
             (scale * row(10).toDouble, scale * row(11).toDouble), row(5)))
-      })
+      }) // -> RDD(killer vertex id, victim vertex id, Killed)
 
-    val graph: Graph[VertexType, EdgeType] = Graph(players.union(games), ranked.union(killed))
+    val graph = Graph[VertexType, EdgeType](players.union(games), ranked.union(killed))
 
     val player_rank_weapon = graph.aggregateMessages[(Int, Int, List[String])](
         ctx => {
@@ -112,16 +108,18 @@ object Main {
             case Ranked(rank) => (rank, 1, Nil)
             case Killed(weapon, _, _, _, _) => (0, 0, List(weapon))
           })
-        },
+        }, // Send message to get the player's rank and the list of weapons they use
         (a, b) => (a._1 + b._1, a._2 + b._2, a._3 ++ b._3)
-      ).map {
+      ) // -> RDD(player vertex id, (rank sum, nb game, [weapons]))
+      .map {
         case (id, (rank_sum, nb_game, weapons)) => (id, (rank_sum.toDouble / nb_game, weapons))
-      }.join(players)
+      } // -> RDD(player vertex id, (avg rank, [weapons]))
+      .join(players) // -> RDD(player vertex id, ((avg rank, [weapons]), Player))
       .filter {
-        case (_, (_, Player(name))) => name != "#unknown"
+        case (_, (_, Player(name))) => name != "#unknown" // Remove unknown players
       }.map {
         case (_, ((rank, weapons), Player(name))) => (name, rank, weapons)
-      }
+      } // -> RDD((name, avg rank, [weapons]))
 
     def printRankWeapon(tuple: (String, Double, List[String])): Unit = {
       tuple match {
@@ -133,31 +131,34 @@ object Main {
       }
     }
 
-    player_rank_weapon.sortBy(_._2)
+    player_rank_weapon.sortBy(_._2) // Sort by average rank, best first
       .take(10)
       .foreach(printRankWeapon)
     println()
 
-    player_rank_weapon.sortBy(_._2, ascending = false)
+    player_rank_weapon.sortBy(_._2, ascending = false) // Sort by average rank, worst first
       .take(10)
       .foreach(printRankWeapon)
     println()
 
-    val kill_known_victim_location = killed.filter{
+    val kill_known_victim_location = killed.filter{ // Remove kills on unspecified maps
       case Edge(_, _, Killed(_, _, _, (x, y), map)) => !(x == 0 && y == 0) && !map.isBlank
-    }.map {
+    } // -> RDD(killer vertex id, victim vertex id, Killed)
+      .map {
       case Edge(_, _, k: Killed) => k
-    }
+    } // -> RDD(Killed)
 
-    val SQRT_SUBDIV = 16
+    val SQRT_SUBDIV = 16 // Square root of the number of subdivisions
 
     val kill_zones = kill_known_victim_location.map {
         case Killed(_, _, _, (x, y), map) =>
           ((map, (SQRT_SUBDIV * x / MAP_SIZE).toInt, (SQRT_SUBDIV * y / MAP_SIZE).toInt), 1)
-      }.reduceByKey(_ + _)
-      .map {
+      } // -> RDD((map, x, y), 1)
+      .reduceByKey(_ + _) // -> RDD((map, x, y), count)
+      .map { // Move data so that we can group by map
         case ((map, x, y), count) => (map, (x, y, count))
-      }.groupByKey()
+      } // -> RDD(map, (x, y, count))
+      .groupByKey() // -> RDD(map, [(x, y, count)])
       .map {
         case (map, counts) =>
           val zones = Array.fill(SQRT_SUBDIV, SQRT_SUBDIV)(0)
@@ -165,7 +166,7 @@ object Main {
             case (x, y, count) => zones(x)(y) = count
           }
           (map, zones)
-      }
+      } // -> RDD(map, [[kill count per zone]])
 
     val NB_ALPHA = 10
     val alpha_range = 0.0 to 1.0 by 1.0 / (NB_ALPHA - 1)
@@ -211,14 +212,16 @@ object Main {
       case (map, zones) => generate_visualization(map, zones)
     }
 
-    val ranges = kill_known_victim_location.filter {
-      case Killed(_, _, (x, y), _, _) => !(x == 0 && y == 0)
-    }.map {
+    val ranges = kill_known_victim_location.filter { // Remove kills with bugged killer or victim position, or on unspecified maps
+      case Killed(_, _, (kx, ky), (vx, vy), map) => !((kx == 0 && ky == 0) || (vx == 0 && vy == 0) || map.isBlank)
+    } // -> RDD(Killed)
+      .map {
       case Killed(weapon, _, (kx, ky), (vx, vy), _) =>
         val dist = Math.sqrt(Math.pow(vx - kx, 2) + Math.pow(vy - ky, 2)) / 100
         val range = weaponRangeFromDist(dist)
         (weapon, range)
-    }.groupByKey()
+    } // -> RDD(weapon, range)
+      .groupByKey() // -> RDD(weapon, [range])
       .map {
         case (weapon, ranges) =>
           val total = ranges.size
@@ -228,14 +231,14 @@ object Main {
             case (range, nb) => (range, nb.toDouble * 100 / total)
           }.sorted
           (weapon, percentage)
-      }
+      } // -> RDD(weapon, [(range, percentage)])
 
     ranges.foreach {
       case (weapon, ranges) =>
         val range_str = ranges.map {
           case (range, percentage) => s"$range ${BigDecimal(percentage).setScale(2, BigDecimal.RoundingMode.HALF_UP)}%"
         }.mkString(", ")
-        println(s"$weapon has a range of $range_str")
+        println(s"$weapon has a range of type: $range_str")
     }
 
   }
